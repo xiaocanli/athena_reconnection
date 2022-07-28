@@ -24,4 +24,4 @@ The reconnection deck (`code/reconnection.cpp`) is a simple double-periodic syst
     - `reconnection.prim.*.athdf.xdmf`: XDMF files for loading the HDF5 files into visualization softwares (e.g., ParaView or VisIt)
 * There is a Jupyter notebook `code/plot_mhd_fields.ipynb` for checking the current density. In default, it will produce the 100th frame of $j_z$, which looks like
 
-<img src="img/jz_100.png" width="400" height="400" />
+<img src="img/jz_100.png" width="450" height="400" />
