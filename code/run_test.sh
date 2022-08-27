@@ -11,7 +11,7 @@ export OMP_PROC_BIND=spread
 export MPICH_MAX_THREAD_SAFETY=multiple
 
 # export PMI_MMAP_SYNC_WAIT_TIME=400
-time srun -n 256 -N 4 -c 4 --cpu_bind=cores ./athena -i athinput.reconnection
+time srun -n 256 -N 4 -c 4 --cpu_bind=cores ./athena -i $1
 
 date
 echo 'Done'

@@ -34,35 +34,53 @@
 
 #undef RELATIVISTIC_DYNAMICS
 
+namespace {
 // initial pressure
-static Real pres_init(const Real bx, const Real by, const Real bz, const int pres_balance);
+Real pres_init(const Real bx, const Real by, const Real bz, const int num_cs,
+    const int pres_balance, const int pert_B, const Real b0, const Real Bguide,
+    const Real phi_pert, const Real beta0, const Real lx);
 
 // functions to compute vector potential to initialize the solution
-static Real A1(const Real x, const Real y, const Real z);
-static Real A2(const Real x, const Real y, const Real z);
-static Real A3(const Real x, const Real y, const Real z);
-static Real A3_pert(const Real x, const Real y, const Real z);
+Real A1(const Real x, const Real y, const Real z);
+Real A2(const Real x, const Real y, const Real z, const int num_cs,
+    const int forcefree, const Real b0, const Real Bguide, const Real cs_width,
+    const Real xleft, const Real xright, const Real xcenter);
+Real A3(const Real x, const Real y, const Real z, const int num_cs,
+    const Real b0, const Real cs_width, const Real xleft, const Real xright,
+    const Real xcenter);
+Real A3_pert(const Real x, const Real y, const Real z, const int num_cs,
+    const Real phi_pert, const Real xleft, const Real xright, const Real xcenter,
+    const Real lx, const Real ly);
 
 /* // Vorticity */
 /* Real ***wx, ***wy, ***wz; */
 
 /* // Apply a density floor - useful for large |z| regions */
-/* static Real D_FLOOR = 1.e-3; */
+/* Real D_FLOOR = 1.e-3; */
+}
 
-// Parameters in initial configurations
-static int forcefree, num_cs, pres_balance, uniform_rho;
-static Real cs_width, beta0;
-static Real b0 = 1.0, Bguide; // Normalized magnetic field
-static int pert_B, pert_V, random_vpert; // Perturbation
-static Real phi_pert, vin_pert;
-static Real xmin, xmax, lx; // Grid dimensions
-static Real ymin, ymax, ly;
-static Real xleft, xright, xcenter;
-static Real gamma_adi, gamma_adi_red, gm1, iso_cs;
-
-#ifdef RELATIVISTIC_DYNAMICS
-static Real rho, pgas;
-#endif
+// Boundary conditions
+void SymmInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                FaceField &b, Real time, Real dt,
+                int is, int ie, int js, int je, int ks, int ke, int ngh);
+void OpenInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                 FaceField &b, Real time, Real dt,
+                 int is, int ie, int js, int je, int ks, int ke, int ngh);
+void OpenOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                FaceField &b, Real time, Real dt,
+                int is, int ie, int js, int je, int ks, int ke, int ngh);
+void OpenInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                FaceField &b, Real time, Real dt,
+                int is, int ie, int js, int je, int ks, int ke, int ngh);
+void OpenOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                FaceField &b, Real time, Real dt,
+                int is, int ie, int js, int je, int ks, int ke, int ngh);
+void ReduceInnerX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                   FaceField &b, Real time, Real dt,
+                   int is, int ie, int js, int je, int ks, int ke, int ngh);
+void ReduceOuterX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                   FaceField &b, Real time, Real dt,
+                   int is, int ie, int js, int je, int ks, int ke, int ngh);
 
 //========================================================================================
 //! \fn void MeshBlock::ProblemGenerator(ParameterInput *pin)
@@ -70,13 +88,27 @@ static Real rho, pgas;
 //========================================================================================
 
 void MeshBlock::ProblemGenerator(ParameterInput *pin) {
-  forcefree = 1;    // In default, forcefree current sheet is used
-  num_cs = 2;       // In default, two current sheets are used
-  pres_balance = 1; // In default, the initial pressure is balanced
-  uniform_rho = 0;  // In default, the initial density is not uniform
-  pert_B = 1;       // In default, magnetic field is perturbed
-  pert_V = 0;       // In default, velocity field is not perturbed
-  random_vpert = 1; // In default, random velocity perturbation is used
+
+  // Parameters in initial configurations
+  Real cs_width, beta0;
+  Real b0 = 1.0, Bguide; // Normalized magnetic field
+  Real phi_pert, vin_pert;
+  Real xmin, xmax, lx; // Grid dimensions
+  Real ymin, ymax, ly;
+  Real xleft, xright, xcenter;
+  Real gamma_adi, gamma_adi_red, gm1, iso_cs;
+
+#ifdef RELATIVISTIC_DYNAMICS
+  Real rho, pgas;
+#endif
+
+  int forcefree = 1;    // In default, forcefree current sheet is used
+  int num_cs = 2;       // In default, two current sheets are used
+  int pres_balance = 1; // In default, the initial pressure is balanced
+  int uniform_rho = 0;  // In default, the initial density is not uniform
+  int pert_B = 1;       // In default, magnetic field is perturbed
+  int pert_V = 0;       // In default, velocity field is not perturbed
+  int random_vpert = 1; // In default, random velocity perturbation is used
 
   xmin  = pin->GetReal("mesh", "x1min");
   xmax  = pin->GetReal("mesh", "x1max");
@@ -119,9 +151,9 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
   AthenaArray<Real> a1, a2, a3;
   AthenaArray<Real> b1i_pert, b2i_pert, b1c_pert, b2c_pert;
-  int nx1 = (ie-is)+1 + 2*(NGHOST);
-  int nx2 = (je-js)+1 + 2*(NGHOST);
-  int nx3 = (ke-ks)+1 + 2*(NGHOST);
+  int nx1 = block_size.nx1 + 2*NGHOST;
+  int nx2 = block_size.nx2 + 2*NGHOST;
+  int nx3 = block_size.nx3 + 2*NGHOST;
   a1.NewAthenaArray(nx3,nx2,nx1);
   a2.NewAthenaArray(nx3,nx2,nx1);
   a3.NewAthenaArray(nx3,nx2,nx1);
@@ -133,105 +165,153 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
 
   int level=loc.level;
   // Initialize components of the vector potential
-  if (block_size.nx3 > 1) {
-    for (int k=ks; k<=ke+1; k++) {
-      for (int j=js; j<=je+1; j++) {
-        for (int i=is; i<=ie+1; i++) {
-          if ((pbval->nblevel[1][0][1]>level && j==js)
-           || (pbval->nblevel[1][2][1]>level && j==je+1)
-           || (pbval->nblevel[0][1][1]>level && k==ks)
-           || (pbval->nblevel[2][1][1]>level && k==ke+1)
-           || (pbval->nblevel[0][0][1]>level && j==js   && k==ks)
-           || (pbval->nblevel[0][2][1]>level && j==je+1 && k==ks)
-           || (pbval->nblevel[2][0][1]>level && j==js   && k==ke+1)
-           || (pbval->nblevel[2][2][1]>level && j==je+1 && k==ke+1)) {
-            Real x1l = pcoord->x1f(i)+0.25*pcoord->dx1f(i);
-            Real x1r = pcoord->x1f(i)+0.75*pcoord->dx1f(i);
-            a1(k,j,i) = 0.5*(A1(x1l, pcoord->x2f(j), pcoord->x3f(k)) +
-                             A1(x1r, pcoord->x2f(j), pcoord->x3f(k)));
-          } else {
-            a1(k,j,i) = A1(pcoord->x1v(i), pcoord->x2f(j), pcoord->x3f(k));
-          }
-
-          if ((pbval->nblevel[1][1][0]>level && i==is)
-           || (pbval->nblevel[1][1][2]>level && i==ie+1)
-           || (pbval->nblevel[0][1][1]>level && k==ks)
-           || (pbval->nblevel[2][1][1]>level && k==ke+1)
-           || (pbval->nblevel[0][1][0]>level && i==is   && k==ks)
-           || (pbval->nblevel[0][1][2]>level && i==ie+1 && k==ks)
-           || (pbval->nblevel[2][1][0]>level && i==is   && k==ke+1)
-           || (pbval->nblevel[2][1][2]>level && i==ie+1 && k==ke+1)) {
-            Real x2l = pcoord->x2f(j)+0.25*pcoord->dx2f(j);
-            Real x2r = pcoord->x2f(j)+0.75*pcoord->dx2f(j);
-            a2(k,j,i) = 0.5*(A2(pcoord->x1f(i), x2l, pcoord->x3f(k)) +
-                             A2(pcoord->x1f(i), x2r, pcoord->x3f(k)));
-          } else {
-            a2(k,j,i) = A2(pcoord->x1f(i), pcoord->x2v(j), pcoord->x3f(k));
-          }
-
-          if ((pbval->nblevel[1][1][0]>level && i==is)
-           || (pbval->nblevel[1][1][2]>level && i==ie+1)
-           || (pbval->nblevel[1][0][1]>level && j==js)
-           || (pbval->nblevel[1][2][1]>level && j==je+1)
-           || (pbval->nblevel[1][0][0]>level && i==is   && j==js)
-           || (pbval->nblevel[1][0][2]>level && i==ie+1 && j==js)
-           || (pbval->nblevel[1][2][0]>level && i==is   && j==je+1)
-           || (pbval->nblevel[1][2][2]>level && i==ie+1 && j==je+1)) {
-            Real x3l = pcoord->x3f(k)+0.25*pcoord->dx3f(k);
-            Real x3r = pcoord->x3f(k)+0.75*pcoord->dx3f(k);
-            a3(k,j,i) = 0.5*(A3(pcoord->x1f(i), pcoord->x2f(j), x3l) +
-                             A3(pcoord->x1f(i), pcoord->x2f(j), x3r));
-            if (pert_B == 1)
-              a3(k,j,i) += 0.5*(A3_pert(pcoord->x1f(i), pcoord->x2f(j), x3l) +
-                                A3_pert(pcoord->x1f(i), pcoord->x2f(j), x3r));
-          } else {
-            a3(k,j,i) = A3(pcoord->x1f(i), pcoord->x2f(j), pcoord->x3v(k));
-            a3(k,j,i) += A3_pert(pcoord->x1f(i), pcoord->x2f(j), pcoord->x3v(k));
-          }
+  for (int k=ks; k<=ke+1; k++) {
+    for (int j=js; j<=je+1; j++) {
+      for (int i=is; i<=ie+1; i++) {
+        if ((pbval->nblevel[1][0][1]>level && j==js)
+         || (pbval->nblevel[1][2][1]>level && j==je+1)
+         || (pbval->nblevel[0][1][1]>level && k==ks)
+         || (pbval->nblevel[2][1][1]>level && k==ke+1)
+         || (pbval->nblevel[0][0][1]>level && j==js   && k==ks)
+         || (pbval->nblevel[0][2][1]>level && j==je+1 && k==ks)
+         || (pbval->nblevel[2][0][1]>level && j==js   && k==ke+1)
+         || (pbval->nblevel[2][2][1]>level && j==je+1 && k==ke+1)) {
+          Real x1l = pcoord->x1f(i)+0.25*pcoord->dx1f(i);
+          Real x1r = pcoord->x1f(i)+0.75*pcoord->dx1f(i);
+          a1(k,j,i) = 0.5*(A1(x1l, pcoord->x2f(j), pcoord->x3f(k)) +
+                           A1(x1r, pcoord->x2f(j), pcoord->x3f(k)));
+        } else {
+          a1(k,j,i) = A1(pcoord->x1v(i), pcoord->x2f(j), pcoord->x3f(k));
         }
-      }
-    }
-  } else {
-    for (int k=ks; k<=ke+1; k++) {
-      for (int j=js; j<=je+1; j++) {
-        for (int i=is; i<=ie+1; i++) {
-          if (i != ie+1)
-            a1(k,j,i) = A1(pcoord->x1v(i), pcoord->x2f(j), pcoord->x3f(k));
-          if (j != je+1)
-            a2(k,j,i) = A2(pcoord->x1f(i), pcoord->x2v(j), pcoord->x3f(k));
-          if (k != ke+1) {
-            a3(k,j,i) = A3(pcoord->x1f(i), pcoord->x2f(j), pcoord->x3v(k));
-            a3(k,j,i) += A3_pert(pcoord->x1f(i), pcoord->x2f(j), pcoord->x3v(k));
-          }
+
+        if ((pbval->nblevel[1][1][0]>level && i==is)
+         || (pbval->nblevel[1][1][2]>level && i==ie+1)
+         || (pbval->nblevel[0][1][1]>level && k==ks)
+         || (pbval->nblevel[2][1][1]>level && k==ke+1)
+         || (pbval->nblevel[0][1][0]>level && i==is   && k==ks)
+         || (pbval->nblevel[0][1][2]>level && i==ie+1 && k==ks)
+         || (pbval->nblevel[2][1][0]>level && i==is   && k==ke+1)
+         || (pbval->nblevel[2][1][2]>level && i==ie+1 && k==ke+1)) {
+          Real x2l = pcoord->x2f(j)+0.25*pcoord->dx2f(j);
+          Real x2r = pcoord->x2f(j)+0.75*pcoord->dx2f(j);
+          a2(k,j,i) = 0.5*(A2(pcoord->x1f(i), x2l, pcoord->x3f(k), num_cs,
+                              forcefree, b0, Bguide, cs_width, xleft, xright, xcenter) +
+                           A2(pcoord->x1f(i), x2r, pcoord->x3f(k), num_cs,
+                              forcefree, b0, Bguide, cs_width, xleft, xright, xcenter));
+        } else {
+          a2(k,j,i) = A2(pcoord->x1f(i), pcoord->x2v(j), pcoord->x3f(k), num_cs,
+                         forcefree, b0, Bguide, cs_width, xleft, xright, xcenter);
+        }
+
+        if ((pbval->nblevel[1][1][0]>level && i==is)
+         || (pbval->nblevel[1][1][2]>level && i==ie+1)
+         || (pbval->nblevel[1][0][1]>level && j==js)
+         || (pbval->nblevel[1][2][1]>level && j==je+1)
+         || (pbval->nblevel[1][0][0]>level && i==is   && j==js)
+         || (pbval->nblevel[1][0][2]>level && i==ie+1 && j==js)
+         || (pbval->nblevel[1][2][0]>level && i==is   && j==je+1)
+         || (pbval->nblevel[1][2][2]>level && i==ie+1 && j==je+1)) {
+          Real x3l = pcoord->x3f(k)+0.25*pcoord->dx3f(k);
+          Real x3r = pcoord->x3f(k)+0.75*pcoord->dx3f(k);
+          a3(k,j,i) = 0.5*(A3(pcoord->x1f(i), pcoord->x2f(j), x3l, num_cs,
+                              b0, cs_width, xleft, xright, xcenter) +
+                           A3(pcoord->x1f(i), pcoord->x2f(j), x3r, num_cs,
+                              b0, cs_width, xleft, xright, xcenter));
+          if (pert_B == 1)
+            a3(k,j,i) += 0.5*(A3_pert(pcoord->x1f(i), pcoord->x2f(j), x3l, num_cs,
+                                      phi_pert, xleft, xright, xcenter, lx, ly) +
+                              A3_pert(pcoord->x1f(i), pcoord->x2f(j), x3r, num_cs,
+                                      phi_pert, xleft, xright, xcenter, lx, ly));
+        } else {
+          a3(k,j,i) = A3(pcoord->x1f(i), pcoord->x2f(j), pcoord->x3v(k), num_cs,
+                         b0, cs_width, xleft, xright, xcenter);
+          a3(k,j,i) += A3_pert(pcoord->x1f(i), pcoord->x2f(j), pcoord->x3v(k), num_cs,
+                               phi_pert, xleft, xright, xcenter, lx, ly);
         }
       }
     }
   }
 
   // Initialize interface fields
-  for (int k=ks; k<=ke; k++) {
-  for (int j=js; j<=je; j++) {
-    for (int i=is; i<=ie+1; i++) {
-      pfield->b.x1f(k,j,i) = (a3(k  ,j+1,i) - a3(k,j,i))/pcoord->dx2f(j) -
-                             (a2(k+1,j  ,i) - a2(k,j,i))/pcoord->dx3f(k);
-    }
-  }}
+  AthenaArray<Real> area, len, len_p1;
+  area.NewAthenaArray(ncells1);
+  len.NewAthenaArray(ncells1);
+  len_p1.NewAthenaArray(ncells1);
 
-  for (int k=ks; k<=ke; k++) {
-  for (int j=js; j<=je+1; j++) {
-    for (int i=is; i<=ie; i++) {
-      pfield->b.x2f(k,j,i) = (a1(k+1,j,i  ) - a1(k,j,i))/pcoord->dx3f(k) -
-                             (a3(k  ,j,i+1) - a3(k,j,i))/pcoord->dx1f(i);
+  // for 1,2,3-D
+  for (int k=ks; k<=ke; ++k) {
+    // reset loop limits for polar boundary
+    int jl=js; int ju=je+1;
+    if (pbval->block_bcs[BoundaryFace::inner_x2] == BoundaryFlag::polar) jl=js+1;
+    if (pbval->block_bcs[BoundaryFace::outer_x2] == BoundaryFlag::polar) ju=je;
+    for (int j=jl; j<=ju; ++j) {
+      pcoord->Face2Area(k,j,is,ie,area);
+      pcoord->Edge3Length(k,j,is,ie+1,len);
+      for (int i=is; i<=ie; ++i) {
+        pfield->b.x2f(k,j,i) = -1.0*(len(i+1)*a3(k,j,i+1) - len(i)*a3(k,j,i))/area(i);
+      }
     }
-  }}
+  }
+  for (int k=ks; k<=ke+1; ++k) {
+    for (int j=js; j<=je; ++j) {
+      pcoord->Face3Area(k,j,is,ie,area);
+      pcoord->Edge2Length(k,j,is,ie+1,len);
+      for (int i=is; i<=ie; ++i) {
+        pfield->b.x3f(k,j,i) = (len(i+1)*a2(k,j,i+1) - len(i)*a2(k,j,i))/area(i);
+      }
+    }
+  }
 
-  for (int k=ks; k<=ke+1; k++) {
-  for (int j=js; j<=je; j++) {
-    for (int i=is; i<=ie; i++) {
-      pfield->b.x3f(k,j,i) = (a2(k,j  ,i+1) - a2(k,j,i))/pcoord->dx1f(i) -
-                             (a1(k,j+1,i  ) - a1(k,j,i))/pcoord->dx2f(j);
+  // for 2D and 3D
+  if (block_size.nx2 > 1) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je; ++j) {
+        pcoord->Face1Area(k,j,is,ie+1,area);
+        pcoord->Edge3Length(k,j  ,is,ie+1,len);
+        pcoord->Edge3Length(k,j+1,is,ie+1,len_p1);
+        for (int i=is; i<=ie+1; ++i) {
+          pfield->b.x1f(k,j,i) = (len_p1(i)*a3(k,j+1,i) - len(i)*a3(k,j,i))/area(i);
+        }
+      }
     }
-  }}
+    for (int k=ks; k<=ke+1; ++k) {
+      for (int j=js; j<=je; ++j) {
+        pcoord->Face3Area(k,j,is,ie,area);
+        pcoord->Edge1Length(k,j  ,is,ie,len);
+        pcoord->Edge1Length(k,j+1,is,ie,len_p1);
+        for (int i=is; i<=ie; ++i) {
+          pfield->b.x3f(k,j,i) -= (len_p1(i)*a1(k,j+1,i) - len(i)*a1(k,j,i))/area(i);
+        }
+      }
+    }
+  }
+  // for 3D only
+  if (block_size.nx3 > 1) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je; ++j) {
+        pcoord->Face1Area(k,j,is,ie+1,area);
+        pcoord->Edge2Length(k  ,j,is,ie+1,len);
+        pcoord->Edge2Length(k+1,j,is,ie+1,len_p1);
+        for (int i=is; i<=ie+1; ++i) {
+          pfield->b.x1f(k,j,i) -= (len_p1(i)*a2(k+1,j,i) - len(i)*a2(k,j,i))/area(i);
+        }
+      }
+    }
+    for (int k=ks; k<=ke; ++k) {
+      // reset loop limits for polar boundary
+      int jl=js; int ju=je+1;
+      if (pbval->block_bcs[BoundaryFace::inner_x2] == BoundaryFlag::polar) jl=js+1;
+      if (pbval->block_bcs[BoundaryFace::outer_x2] == BoundaryFlag::polar) ju=je;
+      for (int j=jl; j<=ju; ++j) {
+        pcoord->Face2Area(k,j,is,ie,area);
+        pcoord->Edge1Length(k  ,j,is,ie,len);
+        pcoord->Edge1Length(k+1,j,is,ie,len_p1);
+        for (int i=is; i<=ie; ++i) {
+          pfield->b.x2f(k,j,i) += (len_p1(i)*a1(k+1,j,i) - len(i)*a1(k,j,i))/area(i);
+        }
+      }
+    }
+  }
 
   // Compute cell-centered fields
   pfield->CalculateCellCenteredField(pfield->b, pfield->bcc, pcoord, is, ie, js, je, ks, ke);
@@ -264,7 +344,8 @@ void MeshBlock::ProblemGenerator(ParameterInput *pin) {
   for (int j=js; j<=je; j++) {
     for (int i=is; i<=ie; i++) {
       pgas_nr = pres_init(pfield->bcc(IB1,k,j,i), pfield->bcc(IB2,k,j,i),
-          pfield->bcc(IB3,k,j,i), pres_balance);
+          pfield->bcc(IB3,k,j,i), num_cs, pres_balance, pert_B, b0, Bguide,
+          phi_pert, beta0, lx);
       // density
       if (uniform_rho)
         phydro->u(IDN,k,j,i) = b0 * b0;
@@ -334,6 +415,22 @@ int RefinementCondition(MeshBlock *pmb);
 
 void Mesh::InitUserMeshData(ParameterInput *pin)
 {
+  // Enroll boundary value function pointers
+  /* EnrollUserBoundaryFunction(BoundaryFace::inner_x1, SymmInnerX1); */
+  if (mesh_bcs[BoundaryFace::inner_x1] == GetBoundaryFlag("user")) {
+    EnrollUserBoundaryFunction(BoundaryFace::inner_x1, OpenInnerX1);
+  }
+  if (mesh_bcs[BoundaryFace::outer_x1] == GetBoundaryFlag("user")) {
+    EnrollUserBoundaryFunction(BoundaryFace::outer_x1, OpenOuterX1);
+  }
+  if (mesh_bcs[BoundaryFace::inner_x2] == GetBoundaryFlag("user")) {
+    EnrollUserBoundaryFunction(BoundaryFace::inner_x2, OpenInnerX2);
+  }
+  if (mesh_bcs[BoundaryFace::outer_x2] == GetBoundaryFlag("user")) {
+    EnrollUserBoundaryFunction(BoundaryFace::outer_x2, OpenOuterX2);
+  }
+  /* EnrollUserBoundaryFunction(BoundaryFace::inner_x3, ReduceInnerX3); */
+  /* EnrollUserBoundaryFunction(BoundaryFace::outer_x3, ReduceOuterX3); */
   if(adaptive==true)
     EnrollUserRefinementCondition(RefinementCondition);
 
@@ -393,11 +490,17 @@ int RefinementCondition(MeshBlock *pmb)
 /*   return 0; */
 /* } */
 
+namespace {
 //========================================================================================
-//! \fn static Real pres_init(const Real bx, const Real by, const Real bz, const int pres_balance)
+//! \fn Real pres_init(const Real bx, const Real by, const Real bz, const int pres_balance)
+//! \fn Real pres_init(const Real bx, const Real by, const Real bz, const int num_cs,
+//          const int pres_balance, const int pert_B, const Real b0, const Real Bguide,
+//          const Real phi_pert, const Real beta0, const Real lx)
 //  \brief initial gas pressure
 //========================================================================================
-static Real pres_init(const Real bx, const Real by, const Real bz, const int pres_balance)
+Real pres_init(const Real bx, const Real by, const Real bz, const int num_cs,
+    const int pres_balance, const int pert_B, const Real b0, const Real Bguide,
+    const Real phi_pert, const Real beta0, const Real lx)
 {
   Real p0, pB, pmag_max;
   if (pres_balance && pert_B) {
@@ -420,18 +523,24 @@ static Real pres_init(const Real bx, const Real by, const Real bz, const int pre
 }
 
 //========================================================================================
-//! \fn static Real A1(const Real x, const Real y, const Real z)
-//! \fn static Real A2(const Real x, const Real y, const Real z)
-//! \fn static Real A3(const Real x, const Real y, const Real z)
+//! \fn Real A1(const Real x, const Real y, const Real z)
+//! \fn Real A2(const Real x, const Real y, const Real z, const int num_cs,
+//!         const int forcefree, const Real b0, const Real Bguide, const Real cs_width,
+//!         const Real xleft, const Real xright, const Real xcenter)
+//! \fn Real A3(const Real x, const Real y, const Real z, const int num_cs,
+//!         const Real b0, const Real cs_width, const Real xleft, const Real xright,
+//!         const Real xcenter)
 //  \brief three components of the vector potential
 //========================================================================================
 
-static Real A1(const Real x, const Real y, const Real z)
+Real A1(const Real x, const Real y, const Real z)
 {
   return 0.0;
 }
 
-static Real A2(const Real x, const Real y, const Real z)
+Real A2(const Real x, const Real y, const Real z, const int num_cs,
+    const int forcefree, const Real b0, const Real Bguide, const Real cs_width,
+    const Real xleft, const Real xright, const Real xcenter)
 {
   Real pix, Ay, a, a2, s2, b2;
 
@@ -477,7 +586,9 @@ static Real A2(const Real x, const Real y, const Real z)
   return Ay;
 }
 
-static Real A3(const Real x, const Real y, const Real z)
+Real A3(const Real x, const Real y, const Real z, const int num_cs,
+    const Real b0, const Real cs_width, const Real xleft, const Real xright,
+    const Real xcenter)
 {
   Real Az;
 
@@ -496,10 +607,14 @@ static Real A3(const Real x, const Real y, const Real z)
 }
 
 //========================================================================================
-//! \fn static Real A3_pert(const Real x, const Real y, const Real z)
-//  \brief A3_pert: 3-component of perturbed vector potential
+//! \fn Real A3_pert(const Real x, const Real y, const Real z, const int num_cs,
+//!         const Real phi_pert, const Real xleft, const Real xright, const Real xcenter,
+//!         const Real lx, const Real ly)
+//  \brief A3_pert: 3rd-component of perturbed vector potential
 //========================================================================================
-static Real A3_pert(const Real x, const Real y, const Real z)
+Real A3_pert(const Real x, const Real y, const Real z, const int num_cs,
+    const Real phi_pert, const Real xleft, const Real xright, const Real xcenter,
+    const Real lx, const Real ly)
 {
   Real dAz;
 
@@ -514,4 +629,423 @@ static Real A3_pert(const Real x, const Real y, const Real z)
     throw std::runtime_error(msg.str().c_str());
   }
   return dAz;
+}
+
+} // namespace
+
+//==============================================================================
+// SymmInnerX1 boundary condution
+//==============================================================================
+void SymmInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                FaceField &b, Real time, Real dt,
+                int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  // copy hydro variables into ghost zones
+  for (int n=0; n<(NHYDRO); ++n) {
+    for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        prim(n,k,j,is-i) = prim(n,k,j,is+i-1);
+      }
+    }}
+  }
+
+  // Set velocity Vx
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        prim(IVX,k,j,is-i) = -prim(IVX,k,j,is+i-1);
+      }
+    }
+  }
+
+  // copy face-centered magnetic fields into ghost zones
+  if (MAGNETIC_FIELDS_ENABLED) {
+    for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        b.x1f(k,j,(is-i)) = b.x1f(k,j,is+i);
+      }
+    }}
+
+    for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je+1; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        b.x2f(k,j,(is-i)) = -b.x2f(k,j,is+i-1);
+      }
+    }}
+
+    for (int k=ks; k<=ke+1; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        b.x3f(k,j,(is-i)) = b.x3f(k,j,is+i-1);
+      }
+    }}
+  }
+}
+
+//==============================================================================
+// Open boundary condition at the left edge
+//==============================================================================
+//! \fn void OpenInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+//                         FaceField &b, Real time, Real dt,
+//                         int is, int ie, int js, int je, int ks, int ke, int ngh)
+//  \brief Open boundary conditions, inner x1 boundary
+void OpenInnerX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                 FaceField &b, Real time, Real dt,
+                 int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  // copy hydro variables into ghost zones
+  for (int n=0; n<(NHYDRO); ++n) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je; ++j) {
+        for (int i=1; i<=ngh; ++i) {
+          prim(n,k,j,is-i) = prim(n,k,j,is+i-1);
+        }
+      }
+    }
+  }
+
+  // inflow restriction
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        if (prim(IVX,k,j,is-i) > 0.0) {
+          prim(IVX,k,j,is-i) = 0.0;
+        }
+      }
+    }
+  }
+
+  // copy face-centered magnetic fields into ghost zones
+  if (MAGNETIC_FIELDS_ENABLED) {
+    for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je+1; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        b.x2f(k,j,(is-i)) = 2.0*b.x2f(k,j,(is-i+1))-b.x2f(k,j,(is-i+2));
+      }
+    }}
+
+    for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        b.x1f(k,j,(is-i)) = b.x1f(k,j,(is-i+1))
+        +(pco->dx1f(is-i+1)/pco->dx2f(j))
+        *(b.x2f(k,(j+1),(is-i+1)) - b.x2f(k,j,(is-i+1)));
+      }
+    }}
+
+    for (int k=ks; k<=ke+1; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        b.x3f(k,j,(is-i)) = b.x3f(k,j,(is+i-1));
+      }
+    }}
+  }
+
+  return;
+}
+
+//==============================================================================
+// Open boundary condition at the right edge
+//==============================================================================
+//! \fn void OpenOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+//                         FaceField &b, Real time, Real dt,
+//                         int is, int ie, int js, int je, int ks, int ke, int ngh)
+//  \brief Open boundary conditions, outer x1 boundary
+void OpenOuterX1(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                    FaceField &b, Real time, Real dt,
+                    int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  // copy hydro variables into ghost zones
+  for (int n=0; n<(NHYDRO); ++n) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=js; j<=je; ++j) {
+        for (int i=1; i<=ngh; ++i) {
+          prim(n,k,j,ie+i) = prim(n,k,j,ie-i+1);
+        }
+      }
+    }
+  }
+
+  // inflow restriction
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        if (prim(IVX,k,j,ie+i) < 0.0) {
+          prim(IVX,k,j,ie+i) = 0.0;
+        }
+      }
+    }
+  }
+
+  // copy face-centered magnetic fields into ghost zones
+  if (MAGNETIC_FIELDS_ENABLED) {
+    for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je+1; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        b.x2f(k,j,(ie+i)) = 2.0*b.x2f(k,j,(ie+i-1))-b.x2f(k,j,(ie+i-2));
+      }
+    }}
+
+    for (int k=ks; k<=ke; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        b.x1f(k,j,(ie+i+1)) = b.x1f(k,j,(ie+i))
+        -(pco->dx1f(ie+i)/pco->dx2f(j))
+        *(b.x2f(k,(j+1),(ie+i)) - b.x2f(k,j,(ie+i)));
+      }
+    }}
+
+    for (int k=ks; k<=ke+1; ++k) {
+    for (int j=js; j<=je; ++j) {
+      for (int i=1; i<=ngh; ++i) {
+        b.x3f(k,j,(ie+i)) = b.x3f(k,j,(ie-i+1));
+      }
+    }}
+  }
+
+  return;
+}
+
+//==============================================================================
+// OpenInnerX2 boundary condition
+//==============================================================================
+void OpenInnerX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                FaceField &b, Real time, Real dt,
+                int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  // copy hydro variables into ghost zones
+  for (int n=0; n<(NHYDRO); ++n) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=1; j<=ngh; ++j) {
+        for (int i=is; i<=ie; ++i) {
+          prim(n,k,js-j,i) = prim(n,k,js+j-1,i);
+        }
+      }
+    }
+  }
+
+  // Inflow restriction
+  Real dn_ratio;
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=1; j<=ngh; ++j) {
+      for (int i=is; i<=ie; ++i) {
+        if (prim(IVY,k,js-j,i) > 0.0) {
+          prim(IVY,k,js-j,i) = 0.0;
+        }
+      }
+    }
+  }
+
+  // copy face-centered magnetic fields into ghost zones
+  if (MAGNETIC_FIELDS_ENABLED) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=1; j<=ngh; ++j) {
+        for (int i=is; i<=ie+1; ++i) {
+          b.x1f(k,(js-j),i) = 2.0*b.x1f(k,(js-j+1),i) - b.x1f(k,(js-j+2),i);
+        }
+      }
+    }
+
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=1; j<=ngh; ++j) {
+        for (int i=is; i<=ie; ++i) {
+          b.x2f(k,(js-j),i) = b.x2f(k,(js-j+1),i)
+          +pco->dx2f(js-j+1)/pco->dx1f(i)*(b.x1f(k,(js-j+1),i+1)-b.x1f(k,(js-j+1),i));
+        }
+      }
+    }
+
+    for (int k=ks; k<=ke+1; ++k) {
+      for (int j=1; j<=ngh; ++j) {
+        for (int i=is; i<=ie; ++i) {
+          b.x3f(k,(js-j),i) = b.x3f(k,(js+j-1),i);
+        }
+      }
+    }
+  }
+
+  return;
+}
+
+//==============================================================================
+// OpenOuterX2 boundary condition
+//==============================================================================
+void OpenOuterX2(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                FaceField &b, Real time, Real dt,
+                int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  // copy hydro variables into ghost zones
+  for (int n=0; n<(NHYDRO); ++n) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=1; j<=ngh; ++j) {
+        for (int i=is; i<=ie; ++i) {
+          prim(n,k,je+j,i) = prim(n,k,je-j+1,i);
+        }
+      }
+    }
+  }
+
+  // Inflow restriction
+  Real dn_ratio;
+  for (int k=ks; k<=ke; ++k) {
+    for (int j=1; j<=ngh; ++j) {
+      for (int i=is; i<=ie; ++i) {
+        if (prim(IVY,k,je+j,i) < 0.0) {
+          prim(IVY,k,je+j,i) = 0.0;
+        }
+      }
+    }
+  }
+
+  // copy face-centered magnetic fields into ghost zones
+  if (MAGNETIC_FIELDS_ENABLED) {
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=1; j<=ngh; ++j) {
+        for (int i=is; i<=ie+1; ++i) {
+          b.x1f(k,(je+j),i) = 2.0*b.x1f(k,(je+j-1),i) - b.x1f(k,(je+j-2),i);
+        }
+      }
+    }
+
+    for (int k=ks; k<=ke; ++k) {
+      for (int j=1; j<=ngh; ++j) {
+        for (int i=is; i<=ie; ++i) {
+          b.x2f(k,(je+j+1),i) = b.x2f(k,(je+j),i)
+          -pco->dx2f(je+j)/pco->dx1f(i)*(b.x1f(k,(je+j),i+1)-b.x1f(k,(je+j),i));
+        }
+      }
+    }
+
+    for (int k=ks; k<=ke+1; ++k) {
+      for (int j=1; j<=ngh; ++j) {
+        for (int i=is; i<=ie; ++i) {
+          b.x3f(k,(je+j  ),i) = b.x3f(k,(je-j+1),i);
+        }
+      }
+    }
+  }
+
+  return;
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn void ReduceInnerX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+//                          FaceField &b, Real time, Real dt,
+//                          int is, int ie, int js, int je, int ks, int ke, int ngh)
+//  \brief Reduce boundary conditions, inner x3 boundary
+
+void ReduceInnerX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                    FaceField &b, Real time, Real dt,
+                    int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  // copy hydro variables into ghost zones
+  for (int n=0; n<(NHYDRO); ++n) {
+    for (int k=1; k<=ngh; ++k) {
+      for (int j=js; j<=je; ++j) {
+#pragma omp simd
+        for (int i=is; i<=ie; ++i) {
+          prim(n,ks-k,j,i) = prim(n,ks,j,i);
+        }
+      }
+    }
+  }
+
+  // Reduce v3
+  for (int k=1; k<=ngh; ++k) {
+    for (int j=js; j<=je; ++j) {
+#pragma omp simd
+      for (int i=is; i<=ie; ++i) {
+        prim(IVZ,ks-k,j,i) = prim(IVZ,ks-k,j,i);
+      }
+    }
+  }
+
+  // copy face-centered magnetic fields into ghost zones
+  if (MAGNETIC_FIELDS_ENABLED) {
+    for (int k=1; k<=ngh; ++k) {
+      for (int j=js; j<=je; ++j) {
+#pragma omp simd
+        for (int i=is; i<=ie+1; ++i) {
+          b.x1f((ks-k),j,i) = b.x1f(ks,j,i);
+        }
+      }}
+
+    for (int k=1; k<=ngh; ++k) {
+      for (int j=js; j<=je+1; ++j) {
+#pragma omp simd
+        for (int i=is; i<=ie; ++i) {
+          b.x2f((ks-k),j,i) = b.x2f(ks,j,i);
+        }
+      }}
+
+    for (int k=1; k<=ngh; ++k) {
+      for (int j=js; j<=je; ++j) {
+#pragma omp simd
+        for (int i=is; i<=ie; ++i) {
+          b.x3f((ks-k),j,i) = b.x3f(ks,j,i);
+        }
+      }}
+  }
+
+  return;
+}
+
+//----------------------------------------------------------------------------------------
+//! \fn void ReduceOuterX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+//                          FaceField &b, Real time, Real dt,
+//                          int is, int ie, int js, int je, int ks, int ke, int ngh)
+//  \brief Reduce boundary conditions, outer x3 boundary
+
+void ReduceOuterX3(MeshBlock *pmb, Coordinates *pco, AthenaArray<Real> &prim,
+                    FaceField &b, Real time, Real dt,
+                    int is, int ie, int js, int je, int ks, int ke, int ngh) {
+  // copy hydro variables into ghost zones
+  for (int n=0; n<(NHYDRO); ++n) {
+    for (int k=1; k<=ngh; ++k) {
+      for (int j=js; j<=je; ++j) {
+#pragma omp simd
+        for (int i=is; i<=ie; ++i) {
+          prim(n,ke+k,j,i) = prim(n,ke,j,i);
+        }
+      }
+    }
+  }
+
+  // Reduce v3 (or pressure)
+  for (int k=1; k<=ngh; ++k) {
+    for (int j=js; j<=je; ++j) {
+#pragma omp simd
+      for (int i=is; i<=ie; ++i) {
+        //prim(IVZ,ke+k,j,i) = 0.05*fabs(prim(IVZ,ke,j,i))+prim(IVZ,ke+k-1,j,i);
+        if (fabs(b.x3f((ke+1),j,i)) >= 0.1) {
+          prim(IPR,ke+k,j,i) = prim(IPR,ke,j,i)*(1.0-k*0.01);
+        }
+      }
+    }
+  }
+
+  // copy face-centered magnetic fields into ghost zones
+  if (MAGNETIC_FIELDS_ENABLED) {
+    for (int k=1; k<=ngh; ++k) {
+      for (int j=js; j<=je; ++j) {
+#pragma omp simd
+        for (int i=is; i<=ie+1; ++i) {
+          b.x1f((ke+k  ),j,i) = b.x1f((ke  ),j,i);
+        }
+      }}
+
+    for (int k=1; k<=ngh; ++k) {
+      for (int j=js; j<=je; ++j) {
+#pragma omp simd
+        for (int i=is; i<=ie; ++i) {
+          b.x2f((ke+k  ),j,i) = b.x2f((ke  ),j,i);
+        }
+      }}
+
+    for (int k=1; k<=ngh; ++k) {
+      for (int j=js; j<=je; ++j) {
+#pragma omp simd
+        for (int i=is; i<=ie; ++i) {
+          b.x3f((ke+k+1),j,i) = b.x3f((ke+1),j,i);
+        }
+      }}
+  }
+
+  return;
 }
