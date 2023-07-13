@@ -1,0 +1,22 @@
+#!/bin/bash
+#
+#SBATCH -q debug
+#SBATCH -N 1
+#SBATCH -t 00:30:00
+#SBATCH -C cpu
+#SBATCH -o athena%j.out
+#SBATCH -e athena%j.err
+#SBATCH -J reconnection
+#SBATCH -A m3122
+##SBATCH --mail-type=FAIL,BEGIN,END
+##SBATCH --mail-user=phyxiaolee@gmail.com
+
+##### These are shell commands
+date
+module load cpu cray-hdf5-parallel
+module list
+
+srun -n 128 -N 1 -c 2 --cpu_bind=cores ./athena -i athinput.reconnection
+
+date
+echo 'Done'

@@ -8,7 +8,7 @@
 #-------------------------------------------------------------------------------
 
 # (0) Initialize
-athena_path=$HOME/mhd/athena
+athena_path=$HOME/mhd/athena-perlmutter
 runs_backup_path=$HOME/mhd_runs_test
 work_path=$PWD
 pname=${PWD##*/}
@@ -17,14 +17,12 @@ source_name='source_'${ctime}'.tar'
 prob_name=reconnection
 
 # Add library path
-export MPICH_MAX_THREAD_SAFETY=multiple
-module swap craype-haswell craype-mic-knl
-module load cray-hdf5-parallel
+module load cpu cray-hdf5-parallel
 module list 2>&1 | tee modules_list
 
 # (1) Step 1: compile
 cd $athena_path
-(python configure.py --prob ${prob_name} --cxx icpc-phi --mpiccmd CC -b --flux hlld -mpi -omp -hdf5 --hdf5_path $HDF5_ROOT) &&
+(python configure.py --prob ${prob_name} --cxx g++ --mpiccmd CC -b --flux hlld -mpi -omp -hdf5 --hdf5_path $HDF5_ROOT) &&
 make clean
 make
 
