@@ -7,7 +7,7 @@ export OMP_NUM_THREADS=2
 export OMP_PLACES=threads
 export OMP_PROC_BIND=spread
 
-time srun -n 256 -N 4 -c 4 --cpu_bind=cores ./athena -i $1
+srun -n 128 -N 1 -c 2 --cpu_bind=cores ./athena -i athinput.reconnection
 
 date
 echo 'Done'
